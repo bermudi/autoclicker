@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QLabel, QSpinBox, QFormLayout, QMessageBox
 )
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, QThreadPool
-import google.generativeai as genai
+import google as genai
 
 class AutomationTask(QRunnable):
     class Signals(QObject):
@@ -44,10 +44,10 @@ class AutomationTask(QRunnable):
                 f"screenshot_{time.time()}.png"
             )
             
-            # Take screenshot using grim
+            # Take screenshot using spectacle
             try:
                 result = subprocess.run(
-                    ['grim', '-g', self.region, screenshot_path],
+                    ['spectacle', '-b', '-r', '-o', screenshot_path],
                     check=True,
                     capture_output=True,
                     text=True
@@ -56,7 +56,7 @@ class AutomationTask(QRunnable):
                 self.signals.error.emit(f"Screenshot failed: {e.stderr}")
                 return
             except FileNotFoundError:
-                self.signals.error.emit("'grim' not found. Install for Wayland screenshots.")
+                self.signals.error.emit("'spectacle' not found. Install for KDE screenshot functionality.")
                 return
             
             # Get Gemini response
