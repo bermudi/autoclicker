@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QLabel, QSpinBox, QFormLayout, QMessageBox
 )
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QRunnable, QThreadPool
-import google as genai
+from google import genai
+from google.genai import types
 
 class AutomationTask(QRunnable):
     class Signals(QObject):
@@ -34,20 +35,16 @@ class AutomationTask(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # Switch to active window with focus delay
             pyautogui.hotkey('alt', 'tab')
-            time.sleep(0.5)  # Allow window focus stabilization
+            time.sleep(0.5)
 
-            # Type initial text with delay
             pyautogui.write(self.init_text, interval=self.init_delay/1000)
 
-            # Generate unique temporary file path for full screenshot
             full_screenshot_path = os.path.join(
                 tempfile.gettempdir(),
                 f"full_screenshot_{time.time()}.png"
             )
 
-            # Take full-screen screenshot using spectacle
             try:
                 subprocess.run(
                     ["spectacle", "-b", "-n", "-f", "-o", full_screenshot_path],
@@ -60,13 +57,11 @@ class AutomationTask(QRunnable):
                 self.signals.error.emit("'spectacle' not found. Install for KDE screenshot functionality.")
                 return
 
-            # Generate unique temporary file path for cropped screenshot
             cropped_screenshot_path = os.path.join(
                 tempfile.gettempdir(),
                 f"cropped_screenshot_{time.time()}.png"
             )
             
-            # Crop the screenshot using GraphicsMagick
             crop_geometry = f"{self.width}x{self.height}+{self.x}+{self.y}"
             try:
                 subprocess.run(
@@ -77,59 +72,59 @@ class AutomationTask(QRunnable):
                 self.signals.error.emit(f"Cropping failed: {e.stderr}")
                 return
             except FileNotFoundError:
-                self.signals.error.emit("'gm' command not found.  Install GraphicsMagick.")
+                self.signals.error.emit("'gm' command not found. Install GraphicsMagick.")
                 return
 
-            # Get Gemini response using the *cropped* image
             gemini_response_text = self.call_gemini_api(cropped_screenshot_path)
-            if gemini_response_text.startswith("Error:"):
+            
+            # Change the error check to be more general:
+            if gemini_response_text.lower().startswith("error"):
                 self.signals.error.emit(gemini_response_text)
                 return
 
-            # Wait for user to focus response field
             time.sleep(2)
-
-            # Type Gemini response with delay
             pyautogui.write(gemini_response_text, interval=self.gemini_response_delay/1000)
 
-            self.signals.finished.emit(cropped_screenshot_path) # Emit cropped path
-            #  Optionally clean up both files:
-            # os.remove(full_screenshot_path)
-            # os.remove(cropped_screenshot_path)
-            
+            self.signals.finished.emit(cropped_screenshot_path)
         except Exception as e:
             self.signals.error.emit(f"Automation Error: {str(e)}")
 
     def call_gemini_api(self, screenshot_path) -> str:
         try:
-            dotenv.load_dotenv()
             API_KEY = os.environ.get("GEMINI_API_KEY")
             if not API_KEY:
                 return "Error: GEMINI_API_KEY not set in environment."
 
-            genai.configure(api_key=API_KEY)  # Now correctly references google.generativeai
+            client = genai.Client(api_key=API_KEY)
 
             with open(screenshot_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode("utf-8")
+                image_bytes = f.read()
 
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-            response = model.generate_content([
-                {"mime_type": "image/png", "data": image_data},
-                self.gemini_prompt
-            ])
+            image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+            
+            system_prompt = 'You can only speak in consonants, the fairy stole all your vowels.'
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[image_part, self.gemini_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=1.0,
+                    max_output_tokens=20
+            ),
+            )
 
             return response.text if response.text else "No response generated"
         except Exception as e:
-            return f"Error: Gemini API call failed: {str(e)}"  # Standardized error prefix
+            return f"Error calling Gemini API: {str(e)}"
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.selected_region = None
-        self.x = None  # Store x coordinate
-        self.y = None  # Store y coordinate
-        self.width = None  # Store width
-        self.height = None  # Store height
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
         self.setup_ui()
         self.setup_connections()
 
@@ -139,13 +134,11 @@ class MainWindow(QMainWindow):
 
         main_layout = QVBoxLayout()
 
-        # Region selection components
         self.select_region_btn = QPushButton("Select Screenshot Region")
         self.region_label = QLabel("No region selected")
         main_layout.addWidget(self.select_region_btn)
         main_layout.addWidget(self.region_label)
 
-        # Configuration form
         form_layout = QFormLayout()
 
         self.initial_text_edit = QLineEdit("11115")
@@ -176,7 +169,6 @@ class MainWindow(QMainWindow):
         self.select_region_btn.clicked.connect(self.on_select_region_clicked)
 
     def on_select_region_clicked(self):
-        """Handle region selection using slurp and parse output."""
         try:
             result = subprocess.run(
                 ['slurp'],
@@ -186,7 +178,6 @@ class MainWindow(QMainWindow):
             )
             self.selected_region = result.stdout.strip()
 
-            # Validate and parse region format
             match = re.match(r"^(-?\d+),(-?\d+) (-?\d+)x(-?\d+)$", self.selected_region)
             if match:
                 self.x, self.y, self.width, self.height = map(int, match.groups())
@@ -208,11 +199,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error",
                 "'slurp' not found. Install for region selection:\nsudo apt install slurp")
             self.selected_region = None
-            self.x = self.y = self.width = self.height = None # Reset on error
+            self.x = self.y = self.width = self.height = None
 
     def on_keystroke_button_clicked(self):
-        """Start automation task with validation and parsed region."""
-        if not self.selected_region or self.x is None:  # Check for valid selection
+        if not self.selected_region or self.x is None:
             QMessageBox.warning(self, "Warning", "Select screenshot region first!")
             return
 
@@ -226,10 +216,10 @@ class MainWindow(QMainWindow):
             init_delay,
             gemini_prompt,
             gemini_response_delay,
-            self.x,  # Pass x
-            self.y,  # Pass y
-            self.width,  # Pass width
-            self.height  # Pass height
+            self.x,
+            self.y,
+            self.width,
+            self.height
         )
         task.signals.finished.connect(self.on_sequence_finished)
         task.signals.error.connect(self.on_error)
