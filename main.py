@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 class ClickerThread(QThread):
     update_signal = pyqtSignal(str)
-    countdown_signal = pyqtSignal(int)
+    countdown_signal = pyqtSignal(int, bool)  # seconds, lock_coords
 
     def __init__(self, interval, num_clicks, button, click_type, lock_coords):
         super().__init__()
@@ -30,7 +30,7 @@ class ClickerThread(QThread):
         for i in range(self.start_delay, 0, -1):
             if not self.running:
                 return
-            self.countdown_signal.emit(i)
+            self.countdown_signal.emit(i, self.lock_coords)
             time.sleep(1)
 
         # Capture position after countdown if needed
@@ -93,7 +93,7 @@ class AutoClickerGUI(QMainWindow):
         interval_layout = QHBoxLayout()
         interval_layout.addWidget(QLabel("Interval (seconds):"))
         self.interval_input = QDoubleSpinBox()
-        self.interval_input.setRange(2, 1000)
+        self.interval_input.setRange(0.1, 1000)
         self.interval_input.setValue(10.0)
         interval_layout.addWidget(self.interval_input)
         settings_layout.addLayout(interval_layout)
@@ -139,13 +139,32 @@ class AutoClickerGUI(QMainWindow):
         layout.addWidget(self.status_label)
 
         # Warning label
-        self.warning_label = QLabel("After clicking Start:\n1. Don't move mouse for 3 seconds\n2. Keep mouse in desired position\n(Lock Coordinates to keep position)")
+        self.warning_label = QLabel()
         self.warning_label.setStyleSheet("color: red; font-weight: bold;")
         self.warning_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.insertWidget(1, self.warning_label)
 
+        # Setup dynamic help
+        self.lock_checkbox.stateChanged.connect(self.update_warning_message)
+        self.update_warning_message(self.lock_checkbox.checkState().value)
+
         main_widget.setLayout(layout)
         self.setCentralWidget(main_widget)
+
+    def update_warning_message(self, state):
+        if state == Qt.CheckState.Checked.value:
+            self.warning_label.setText(
+                "After clicking Start:\n"
+                "1. Position mouse during 3-second countdown\n"
+                "2. Keep mouse still until countdown finishes\n"
+                "(Position will be locked automatically)"
+            )
+        else:
+            self.warning_label.setText(
+                "After clicking Start:\n"
+                "Clicks will use mouse position at each interval\n"
+                "You can move mouse freely during operation"
+            )
 
     def toggle_clicking(self):
         if self.thread and self.thread.isRunning():
@@ -172,18 +191,19 @@ class AutoClickerGUI(QMainWindow):
         if self.thread:
             self.thread.stop()
             self.start_stop_btn.setText("Start")
-            self.start_stop_btn.setEnabled(True)
             self.status_label.setText("Status: Stopped")
 
     def update_status(self, message):
         self.status_label.setText(f"Status: Running - {message}")
 
-    def show_countdown(self, seconds):
-        self.status_label.setText(f"Starting in {seconds}... (Keep mouse still!)")
+    def show_countdown(self, seconds, lock_coords):
+        if lock_coords:
+            self.status_label.setText(f"Starting in {seconds}... (Keep mouse still!)")
+        else:
+            self.status_label.setText(f"Starting in {seconds}...")
 
     def clicking_finished(self):
         self.start_stop_btn.setText("Start")
-        self.start_stop_btn.setEnabled(True)
         self.status_label.setText("Status: Completed")
 
     def closeEvent(self, event):
